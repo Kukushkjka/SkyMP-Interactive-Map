@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkyMP Карта ивентов</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="style.css">
+    <style>
+        .sidebar { max-height: 95vh; overflow-y: auto; width: 260px; }
+        .filter-item { display: flex; align-items: center; gap: 8px; cursor: pointer; margin-bottom: 5px; font-size: 13px; }
+        .filter-item img { width: 18px; height: 18px; }
+        #search-results { background: rgba(40, 40, 40, 0.95); border: 1px solid #444; border-radius: 4px; margin-bottom: 10px; max-height: 200px; overflow-y: auto; display: none; }
+        .search-result-item { padding: 8px; border-bottom: 1px solid #333; cursor: pointer; color: #eee; font-size: 13px; }
+        .search-result-item:hover { background: #007bff; }
+        
+        #history-modal { display:none; position:fixed; top:50%; left:50%; transform:translate(-50%, -50%); width: 85%; max-width: 600px; height: 70vh; background: #1a1a1a; color: white; z-index: 10001; border-radius: 8px; border: 1px solid #444; box-shadow: 0 0 20px rgba(0,0,0,0.5); padding: 20px; flex-direction: column; }
+        #history-content { flex: 1; overflow-y: auto; margin-top: 10px; }
+        .history-entry { background: rgba(255,255,255,0.05); padding: 10px; border-radius: 4px; margin-bottom: 10px; border-left: 3px solid #007bff; }
+        .history-date { font-size: 11px; color: #888; display: block; }
+        #modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); z-index:10000; }
+        
+        /* Стили для приветственного напоминания */
+        #welcome-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 20000;
+            transition: opacity 1s ease;
+        }
+        .welcome-card {
+            background: #1a1a1a;
+            border: 2px solid #007bff;
+            padding: 30px;
+            border-radius: 10px;
+            max-width: 500px;
+            text-align: center;
+            color: white;
+            box-shadow: 0 0 30px rgba(0, 123, 255, 0.3);
+        }
+        .welcome-card h2 { color: #007bff; margin-top: 0; }
+        .welcome-card ol { text-align: left; line-height: 1.6; }
+
+        .sidebar::-webkit-scrollbar { width: 5px; }
+        .sidebar::-webkit-scrollbar-thumb { background: #555; border-radius: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="welcome-overlay">
+        <div class="welcome-card">
+            <h2>Напоминание для игроков</h2>
+            <ol>
+                <li><b>Не используйте мета-информацию</b>, полученную с карты. Ваш персонаж не может знать о том, чего не знает в IC.</li>
+                <li>Если хотите поучаствовать в ивенте — <b>напишите в Discord ивентера</b>, он указан в описании локации.</li>
+            </ol>
+            <p style="color: #666; font-size: 12px; margin-top: 20px;">Это окно закроется автоматически...</p>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="sidebar">
+        <div id="auth-section">
+            <div id="login-form">
+                <input type="text" id="user-login" placeholder="Логин" style="width: 100%; margin-bottom: 5px; padding: 5px; box-sizing: border-box; background: #2a2a2a; color: white; border: 1px solid #444;">
+                <input type="password" id="user-pass" placeholder="Пароль" style="width: 100%; margin-bottom: 5px; padding: 5px; box-sizing: border-box; background: #2a2a2a; color: white; border: 1px solid #444;">
+                <button onclick="loginUser()" style="width: 100%; background: #007bff; color: white; border: none; padding: 8px; cursor: pointer; border-radius: 4px;">Войти</button>
+            </div>
+            <div id="user-logged" style="display: none; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 10px; margin-bottom: 10px;">
+                <span style="font-size: 14px;">Мастер: <b id="current-user-name" style="color: #007bff;"></b></span>
+                <button onclick="logoutUser()" style="background: none; border: 1px solid #777; color: #ccc; font-size: 10px; cursor: pointer; margin-left: 10px; padding: 2px 5px;">Выйти</button>
+            </div>
+        </div>
+
+        <div id="search-filter-section" style="margin-top: 10px;">
+            <button onclick="showGlobalHistory()" style="width: 100%; background: #28a745; color: white; border: none; padding: 10px; cursor: pointer; border-radius: 4px; margin-bottom: 10px; font-weight: bold;">📜 СОБЫТИЯ СЕРВЕРА</button>
+            
+            <input type="text" id="map-search" placeholder="Поиск локации..." oninput="handleSearch(this.value)" 
+                   style="width: 100%; padding: 8px; box-sizing: border-box; background: #2a2a2a; color: white; border: 1px solid #444; border-radius: 4px; margin-bottom: 5px;">
+            
+            <div id="search-results"></div>
+
+            <div id="filters" style="background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px; color: white;">
+                <b style="display:block; margin-bottom:8px; color: #aaa; font-size: 12px;">ФИЛЬТРЫ:</b>
+                <label class="filter-item"><input type="checkbox" checked class="filter-check" value="city" onchange="renderMarkers()"><img src="assets/icons/3.png"> Города</label>
+                <label class="filter-item"><input type="checkbox" checked class="filter-check" value="village" onchange="renderMarkers()"><img src="assets/icons/4.png"> Деревни и фермы</label>
+                <label class="filter-item"><input type="checkbox" checked class="filter-check" value="dungeon" onchange="renderMarkers()"><img src="assets/icons/5.png"> Пещеры</label>
+                <label class="filter-item"><input type="checkbox" checked class="filter-check" value="ruins" onchange="renderMarkers()"><img src="assets/icons/8.png"> Руины</label>
+                <label class="filter-item"><input type="checkbox" checked class="filter-check" value="camp" onchange="renderMarkers()"><img src="assets/icons/31.png"> Лагеря</label>
+                <label class="filter-item"><input type="checkbox" checked class="filter-check" value="shrine" onchange="renderMarkers()"><img src="assets/icons/105.png"> Святилища</label>
+                <label class="filter-item"><input type="checkbox" checked class="filter-check" value="mine" onchange="renderMarkers()"><img src="assets/icons/21.png"> Шахты</label>
+                <label class="filter-item"><input type="checkbox" checked class="filter-check" value="other" onchange="renderMarkers()"><img src="assets/icons/123.png"> Прочее</label>
+            </div>
+        </div>
+
+        <div id="editor-tools" style="display: none;">
+            <hr style="opacity: 0.1; margin: 15px 0;">
+            <h3 style="margin: 0 0 5px 0; font-size: 16px; color: white;">Иконки на выбор</h3>
+            <div class="icon-grid" id="iconSelector"></div>
+            <div id="status" style="color: #aaa; text-align: center; font-size: 11px;">Выбрана: 1.png</div>
+        </div>
+    </div>
+
+    <div id="history-modal">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #444; padding-bottom: 10px;">
+            <h2 id="history-title" style="margin:0; font-size: 18px;">Хронология</h2>
+            <button onclick="closeHistory()" style="background:none; border:none; color:white; font-size:24px; cursor:pointer;">&times;</button>
+        </div>
+        <div id="history-content"></div>
+    </div>
+    <div id="modal-overlay" onclick="closeHistory()"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
